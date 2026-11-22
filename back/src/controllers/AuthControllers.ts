@@ -1,0 +1,557 @@
+import { Request, Response } from "express";
+import Session from "../components/session.js";
+import Validator from "../utils/validator.js";
+import userRepositoru from "../repository/UserRepository.js";
+// import { OAuth2Client } from "google-auth-library";
+import Bcrypt from "../utils/bcrypt.js";
+import {
+  Usuario,
+  CrearUsuarioDTO,
+  ActualizarUsuarioDTO,
+} from "../interfaces/usuario.interface.js";
+import { SessionUser } from "../types/express-session.js";
+// import { enviarCorreoRecuperacion } from "../utils/mailer.js";
+
+class Auth {
+  constructor(
+    private readonly session = Session,
+    private readonly validator = Validator,
+    private readonly repository = userRepositoru,
+    private readonly bcrypt = Bcrypt,
+    // private readonly googleClient = new OAuth2Client(
+    //   process.env.GOOGLE_CLIENT_ID,
+    // ),
+  ) {}
+
+  /**
+   * Extrae el ID del usuario desde la sesión, body, query o params.
+   */
+  resolveUserId(req: Request): string | null {
+    return req.session?.user?.id ? String(req.session.user.id) : null;
+  }
+
+  async login(req: Request, res: Response): Promise<Response> {
+    try {
+      const { email, correo, password, contrasena, clave } = req.body;
+      const normalizedEmail = (correo ?? email ?? "").trim().toLowerCase();
+      const rawPassword = password ?? contrasena ?? clave;
+
+      if (!normalizedEmail || !rawPassword) {
+        return res.status(400).json({
+          success: false,
+          message: "Correo y contraseña son requeridos",
+        });
+      }
+
+      if (typeof rawPassword !== "string" || rawPassword.trim() === "") {
+        return res.status(400).json({
+          success: false,
+          message: "Contraseña requerida",
+        });
+      }
+
+      const emailValidation =
+        await this.validator.validateEmail(normalizedEmail);
+      if (!emailValidation.success) {
+        return res.status(400).json({
+          success: false,
+          message: "Correo electrónico inválido",
+        });
+      }
+
+      // 1. Obtener usuario de la base de datos por correo
+      const userBD: Usuario | undefined =
+        await this.repository.getUsuarioPorCorreo(normalizedEmail);
+
+      if (!userBD) {
+        return res.status(401).json({
+          success: false,
+          message: "Usuario no encontrado",
+        });
+      }
+
+      // 2. Validar si la cuenta fue creada por OAuth (Google/GitHub) y no tiene clave local
+      if (!userBD.clave_hash) {
+        return res.status(400).json({
+          success: false,
+          message: `Esta cuenta está vinculada con ${userBD.proveedor_auth}. Inicia sesión usando ese botón.`,
+        });
+      }
+
+      // 3. Comparar la contraseña encriptada contra clave_hash
+      const valid = await this.bcrypt.compare(rawPassword, userBD.clave_hash);
+
+      if (!valid) {
+        return res.status(401).json({
+          success: false,
+          message: "Contraseña incorrecta",
+        });
+      }
+
+      // 4. Formatear al tipo SessionUser alineado con la plataforma gamificada
+      const sessionUser: SessionUser = {
+        id: userBD.id,
+        correo: userBD.correo,
+        nombre_usuario: userBD.nombre_usuario,
+        xp_total: userBD.xp_total,
+        nivel_actual: userBD.nivel_actual,
+      };
+
+      // 5. Delegar la creación de sesión a Session.ts
+      await this.session.createSession({ request: req, response: res }, [
+        sessionUser,
+      ]);
+
+      return res;
+    } catch (error) {
+      if (res.headersSent) {
+        return res;
+      }
+      return res.status(500).json({
+        success: false,
+        message: "Error interno en el servidor durante el inicio de sesión",
+      });
+    }
+  }
+
+  async register(req: Request, res: Response): Promise<Response> {
+    try {
+      const { nombre_usuario, correo, password, contrasena, clave } = req.body;
+
+      const normalizedUsername = (nombre_usuario ?? "").trim();
+      const normalizedEmail = (correo ?? "").trim().toLowerCase();
+      const rawPassword = password ?? contrasena ?? clave;
+
+      if (!normalizedUsername || !normalizedEmail || !rawPassword) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Los campos nombre_usuario, correo y contraseña son obligatorios",
+        });
+      }
+
+      // Validaciones básicas de negocio
+      const emailValidation =
+        await this.validator.validateEmail(normalizedEmail);
+      if (!emailValidation.success) {
+        return res.status(400).json({
+          success: false,
+          message: "Correo electrónico inválido",
+        });
+      }
+
+      const passwordValidation =
+        await this.validator.validatePassword(rawPassword);
+      if (!passwordValidation.success) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "La contraseña no cumple con los requisitos mínimos de seguridad",
+        });
+      }
+
+      // Verificar si el correo ya está registrado
+      const existingUserByEmail =
+        await this.repository.getUsuarioPorCorreo(normalizedEmail);
+      if (existingUserByEmail) {
+        return res.status(409).json({
+          success: false,
+          message: "El correo electrónico ya está registrado",
+        });
+      }
+
+      // Verificar si el nombre de usuario ya está en uso (si tienes este método en tu repo)
+      if (this.repository.getUsuarioPorNombre) {
+        const existingUsername =
+          await this.repository.getUsuarioPorNombre(normalizedUsername);
+        if (existingUsername) {
+          return res.status(409).json({
+            success: false,
+            message: "El nombre de usuario ya está en uso",
+          });
+        }
+      }
+
+      // Encriptar contraseña
+      const hashedPassword = await this.bcrypt.hash(rawPassword);
+
+      // Estructurar el DTO de creación alineado con la nueva tabla usuarios
+      const newUserPayload: CrearUsuarioDTO = {
+        nombre_usuario: normalizedUsername,
+        correo: normalizedEmail,
+        clave_hash: hashedPassword,
+        proveedor_auth: "local",
+      };
+
+      const result = await this.repository.crearUsuario(newUserPayload);
+
+      return res.status(201).json({
+        success: true,
+        message: "Usuario creado correctamente",
+        usuario: {
+          id: result.id,
+          nombre_usuario: result.nombre_usuario,
+          correo: result.correo,
+          xp_total: result.xp_total,
+          nivel_actual: result.nivel_actual,
+        },
+      });
+    } catch (error: any) {
+      // Captura por si la BD rechaza duplicado de nombre_usuario
+      if (error?.code === "23505") {
+        return res.status(409).json({
+          success: false,
+          message: "El nombre de usuario o correo ya está registrado",
+        });
+      }
+      return res.status(500).json({
+        success: false,
+        message: "Ocurrió un error al registrar el usuario",
+      });
+    }
+  }
+
+  async updateUser(req: Request, res: Response): Promise<Response> {
+    try {
+      const usuarioId = await this.resolveUserId(req);
+
+      if (!usuarioId) {
+        return res.status(400).json({
+          success: false,
+          message: "ID de usuario inválido",
+        });
+      }
+
+      const { nombre_usuario, correo, newPassword } = req.body;
+
+      if (!nombre_usuario && !correo && !newPassword) {
+        return res.status(400).json({
+          success: false,
+          message: "Debe proporcionar al menos un campo para actualizar",
+        });
+      }
+
+      if (newPassword) {
+        const passValidation =
+          await this.validator.validatePassword(newPassword);
+        if (!passValidation.success) {
+          return res.status(400).json({
+            success: false,
+            message: "Contraseña no válida",
+          });
+        }
+
+        const hashed = await this.bcrypt.hash(newPassword);
+        await this.repository.actualizarPassword(usuarioId, hashed);
+      }
+
+      // Obtener datos actuales para no sobreescribir con undefined si solo envió uno
+      const currentUser = await this.repository.getUsuarioPorId(usuarioId);
+      if (!currentUser) {
+        return res.status(404).json({
+          success: false,
+          message: "Usuario no encontrado",
+        });
+      }
+
+      const updateData: ActualizarUsuarioDTO = {
+        id: usuarioId,
+        nombre_usuario: nombre_usuario
+          ? nombre_usuario.trim()
+          : currentUser.nombre_usuario,
+        correo: correo ? correo.trim().toLowerCase() : currentUser.correo,
+      };
+
+      const updated = await this.repository.actualizarUsuario(updateData);
+
+      return res.json({
+        success: true,
+        message: "Información de usuario actualizada correctamente",
+        usuario: updated,
+      });
+    } catch (error: any) {
+      if (error?.code === "23505") {
+        return res.status(409).json({
+          success: false,
+          message: "El nombre de usuario o correo ya pertenece a otra cuenta",
+        });
+      }
+      return res.status(500).json({
+        success: false,
+        message: "No se pudo actualizar la cuenta del usuario",
+      });
+    }
+  }
+
+  async logout(req: Request, res: Response): Promise<Response> {
+    this.session.destroySession({ request: req, response: res });
+    return res;
+  }
+
+  async deleteUser(req: Request, res: Response): Promise<Response> {
+    try {
+      const usuarioId = await this.resolveUserId(req);
+
+      if (!usuarioId) {
+        return res.status(400).json({
+          success: false,
+          message: "ID de usuario inválido o ausente",
+        });
+      }
+
+      await this.repository.eliminarUsuario(usuarioId);
+
+      if (req.session) {
+        req.session.destroy(() => {});
+      }
+
+      return res.json({
+        success: true,
+        message: "La cuenta de usuario ha sido eliminada exitosamente",
+      });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        message: "No se pudo eliminar la cuenta de usuario",
+      });
+    }
+  }
+
+  async getAllUsers(req: Request, res: Response): Promise<Response> {
+    try {
+      const users = await this.repository.getUsuarios();
+
+      return res.json({
+        success: true,
+        data: users,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        message: "No se pudieron obtener los usuarios",
+      });
+    }
+  }
+
+  async checkSession(req: Request, res: Response): Promise<Response> {
+    const exists = this.session.sessionExist({ request: req, response: res });
+    if (exists && req.session?.user) {
+      return res.json({
+        success: true,
+        message: "Usuario autenticado",
+        user: req.session.user,
+      });
+    }
+
+    return res.status(401).json({
+      success: false,
+      message: "Usuario no autenticado",
+    });
+  }
+
+  // async googleAuth(req: Request, res: Response): Promise<Response> {
+  //   try {
+  //     const { idToken } = req.body;
+
+  //     if (!idToken || typeof idToken !== "string") {
+  //       return res.status(400).json({
+  //         success: false,
+  //         message: "El parámetro idToken es requerido",
+  //       });
+  //     }
+
+  //     // 1. Verificar el Token enviado por el Frontend con los servidores de Google
+  //     const ticket = await this.googleClient.verifyIdToken({
+  //       idToken,
+  //       audience: process.env.GOOGLE_CLIENT_ID,
+  //     });
+
+  //     const payload = ticket.getPayload();
+  //     if (
+  //       !payload ||
+  //       !payload.email ||
+  //       !payload.email_verified ||
+  //       payload.email_verified !== true
+  //     ) {
+  //       return res.status(401).json({
+  //         success: false,
+  //         message: "Token de Google no válido o sin correo asociado",
+  //       });
+  //     }
+
+  //     const googleId = payload.sub;
+  //     const correo = payload.email.toLowerCase().trim();
+  //     const nombreCompleto = payload.name || "Usuario de Google";
+  //     const avatarUrl = payload.picture || null;
+
+  //     // 2. Buscar si el usuario ya existe por correo
+  //     let userBD: Usuario | undefined =
+  //       await this.repository.getUsuarioPorCorreo(correo);
+
+  //     if (!userBD) {
+  //       // 3A. Si NO existe -> REGISTRO AUTOMÁTICO
+  //       const newUserPayload = {
+  //         nombre_completo: nombreCompleto,
+  //         correo: correo,
+  //         password_hash: "",
+  //         rol: "cliente", // TS deduce que es de tipo string
+  //         id_google: googleId,
+  //         avatar_url: avatarUrl ?? undefined,
+  //       };
+
+  //       const result = await this.repository.crearUsuarioGoogle(newUserPayload);
+
+  //       userBD = await this.repository.getUsuarioPorCorreo(correo);
+  //     } else if (!userBD.id_google && this.repository.vincularGoogleId) {
+  //       // 3B. Si ya existía por correo tradicional pero no tenía google_id -> VINCULAR
+  //       await this.repository.vincularGoogleId(userBD.id, googleId, avatarUrl);
+  //     }
+
+  //     if (!userBD) {
+  //       return res.status(500).json({
+  //         success: false,
+  //         message: "Error al procesar el usuario de Google en la base de datos",
+  //       });
+  //     }
+
+  //     // 4. Formatear la sesión idéntica a tu método login()
+  //     const sessionUser: SessionUser = {
+  //       id: userBD.id,
+  //       email: userBD.correo,
+  //       nombre: userBD.nombre_completo,
+  //       tipo: userBD.rol,
+  //     };
+
+  //     console.log(
+  //       "[Auth Google] Usuario autenticado vía Google:",
+  //       sessionUser.email,
+  //       "ID:",
+  //       sessionUser.id,
+  //     );
+
+  //     // 5. Crear la sesión en Express-Session mediante tu componente Session.ts
+  //     await this.session.createSession({ request: req, response: res }, [
+  //       sessionUser,
+  //     ]);
+
+  //     return res;
+  //   } catch (error) {
+  //     console.error("[Auth Google Error]:", error);
+  //     if (res.headersSent) {
+  //       return res;
+  //     }
+  //     return res.status(401).json({
+  //       success: false,
+  //       message: "Error al autenticar con Google o token expirado",
+  //     });
+  //   }
+  // }
+
+  // async forgotPassword(req: Request, res: Response): Promise<Response> {
+  //   try {
+  //     const { correo } = req.body;
+  //     const normalizedEmail = (correo ?? "").trim().toLowerCase();
+
+  //     if (!normalizedEmail) {
+  //       return res
+  //         .status(400)
+  //         .json({ success: false, message: "El correo es requerido" });
+  //     }
+
+  //     const userBD = await this.repository.getUsuarioPorCorreo(normalizedEmail);
+  //     if (!userBD) {
+  //       // Por seguridad, a veces es mejor decir "Si el correo existe, enviaremos un código"
+  //       // para evitar que descubran qué correos están registrados.
+  //       return res
+  //         .status(404)
+  //         .json({ success: false, message: "Usuario no encontrado" });
+  //     }
+
+  //     // Generar código aleatorio de 6 dígitos
+  //     const resetToken = Math.floor(100000 + Math.random() * 900000).toString();
+  //     const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutos de vigencia
+
+  //     // Guardar token en la BD (debes crear este método en tu UserRepository)
+  //     await this.repository.guardarResetToken(userBD.id, resetToken, expiresAt);
+
+  //     // Enviar correo
+  //     await enviarCorreoRecuperacion(normalizedEmail, resetToken);
+
+  //     return res.json({
+  //       success: true,
+  //       message:
+  //         "Se ha enviado un código de recuperación a tu correo electrónico",
+  //     });
+  //   } catch (error) {
+  //     console.error("Error en forgotPassword:", error);
+  //     return res
+  //       .status(500)
+  //       .json({ success: false, message: "Error al procesar la solicitud" });
+  //   }
+  // }
+
+  // async resetPassword(req: Request, res: Response): Promise<Response> {
+  //   try {
+  //     const { correo, codigo, nuevaPassword } = req.body;
+  //     const normalizedEmail = (correo ?? "").trim().toLowerCase();
+
+  //     if (!normalizedEmail || !codigo || !nuevaPassword) {
+  //       return res.status(400).json({
+  //         success: false,
+  //         message: "Correo, código y nueva contraseña son obligatorios",
+  //       });
+  //     }
+
+  //     // Validar requisitos de la nueva contraseña
+  //     const passwordValidation =
+  //       await this.validator.validatePassword(nuevaPassword);
+  //     if (!passwordValidation.success) {
+  //       return res.status(400).json({
+  //         success: false,
+  //         message: "La contraseña no cumple con los requisitos de seguridad",
+  //       });
+  //     }
+
+  //     const userBD = await this.repository.getUsuarioPorCorreo(normalizedEmail);
+  //     if (!userBD || !userBD.reset_token || !userBD.reset_token_expires) {
+  //       return res
+  //         .status(400)
+  //         .json({ success: false, message: "Código inválido o expirado" });
+  //     }
+
+  //     // Verificar si el código coincide y no ha expirado
+  //     const isTokenValid = userBD.reset_token === codigo;
+  //     const isNotExpired = new Date() < new Date(userBD.reset_token_expires);
+
+  //     if (!isTokenValid || !isNotExpired) {
+  //       return res.status(400).json({
+  //         success: false,
+  //         message: "El código es incorrecto o ha expirado",
+  //       });
+  //     }
+
+  //     // Hashear la nueva contraseña
+  //     const hashedPassword = await this.bcrypt.hash(nuevaPassword);
+
+  //     // Actualizar contraseña y limpiar el token de recuperación en la BD
+  //     await this.repository.actualizarPasswordYLimpiarToken(
+  //       userBD.id,
+  //       hashedPassword,
+  //     );
+
+  //     return res.json({
+  //       success: true,
+  //       message:
+  //         "Contraseña actualizada exitosamente. Ya puedes iniciar sesión.",
+  //     });
+  //   } catch (error) {
+  //     console.error("Error en resetPassword:", error);
+  //     return res.status(500).json({
+  //       success: false,
+  //       message: "Error al restablecer la contraseña",
+  //     });
+  //   }
+  // }
+}
+
+export default new Auth();

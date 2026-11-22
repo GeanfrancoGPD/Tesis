@@ -1,0 +1,72 @@
+{
+  "getUsuarios": {
+    "query": "SELECT id, nombre_usuario, correo, proveedor_auth, xp_total, nivel_actual, jefe_final_derrotado, creado_en FROM usuarios ORDER BY xp_total DESC",
+    "structure_params": {},
+    "orderArray": []
+  },
+  "getUsuarioPorId": {
+    "query": "SELECT id, nombre_usuario, correo, proveedor_auth, xp_total, nivel_actual, jefe_final_derrotado, creado_en FROM usuarios WHERE id = $1",
+    "structure_params": {
+      "id": "string"
+    },
+    "orderArray": ["id"]
+  },
+  "getUsuarioPorCorreo": {
+    "query": "SELECT id, nombre_usuario, correo, clave_hash, proveedor_auth, xp_total, nivel_actual, jefe_final_derrotado, creado_en FROM usuarios WHERE correo = $1",
+    "structure_params": {
+      "correo": "string"
+    },
+    "orderArray": ["correo"]
+  },
+  "crearUsuario": {
+    "query": "INSERT INTO usuarios (nombre_usuario, correo, clave_hash, proveedor_auth) VALUES ($1, $2, $3, $4) RETURNING id, nombre_usuario, correo, proveedor_auth, xp_total, nivel_actual, jefe_final_derrotado, creado_en",
+    "structure_params": {
+      "nombre_usuario": "string",
+      "correo": "string",
+      "clave_hash": "string",
+      "proveedor_auth": "string"
+    },
+    "orderArray": ["nombre_usuario", "correo", "clave_hash", "proveedor_auth"]
+  },
+  "actualizarUsuario": {
+    "query": "UPDATE usuarios SET nombre_usuario = $1, correo = $2 WHERE id = $3 RETURNING id, nombre_usuario, correo, proveedor_auth, xp_total, nivel_actual, jefe_final_derrotado, creado_en",
+    "structure_params": {
+      "nombre_usuario": "string",
+      "correo": "string",
+      "id": "string"
+    },
+    "orderArray": ["nombre_usuario", "correo", "id"]
+  },
+  "actualizarProgresoGamificacion": {
+    "query": "UPDATE usuarios SET xp_total = $1, nivel_actual = $2, jefe_final_derrotado = $3 WHERE id = $4 RETURNING id, nombre_usuario, xp_total, nivel_actual, jefe_final_derrotado",
+    "structure_params": {
+      "xp_total": "number",
+      "nivel_actual": "number",
+      "jefe_final_derrotado": "boolean",
+      "id": "string"
+    },
+    "orderArray": ["xp_total", "nivel_actual", "jefe_final_derrotado", "id"]
+  },
+  "actualizarPassword": {
+    "query": "UPDATE usuarios SET clave_hash = $1 WHERE id = $2",
+    "structure_params": {
+      "clave_hash": "string",
+      "id": "string"
+    },
+    "orderArray": ["clave_hash", "id"]
+  },
+  "eliminarUsuario": {
+    "query": "DELETE FROM usuarios WHERE id = $1",
+    "structure_params": {
+      "id": "string"
+    },
+    "orderArray": ["id"]
+  },
+  "getUsuarioPorNombreUsuario": {
+    "query": "SELECT id, nombre_usuario, correo, proveedor_auth, xp_total, nivel_actual, jefe_final_derrotado, creado_en FROM usuarios WHERE nombre_usuario = $1",
+    "structure_params": {
+      "nombre_usuario": "string"
+    },
+    "orderArray": ["nombre_usuario"]
+  }
+}
