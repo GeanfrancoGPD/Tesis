@@ -68,5 +68,84 @@
       "nombre_usuario": "string"
     },
     "orderArray": ["nombre_usuario"]
+  },
+
+  "getMundosConProgreso": {
+    "query": "SELECT m.id, m.orden, m.titulo, m.subtitulo, m.descripcion, m.nombre_gema, m.icono_slug, COUNT(s.id)::int AS total_sesiones, COUNT(pu.id) FILTER (WHERE pu.estado = 'completado')::int AS sesiones_completadas, COALESCE(BOOL_OR(s.tipo_sesion = 'guardian' AND pu.estado = 'completado'), false) AS gema_desbloqueada FROM mundos m LEFT JOIN sesiones s ON s.mundo_id = m.id LEFT JOIN progreso_usuarios pu ON pu.sesion_id = s.id AND pu.usuario_id = $1 GROUP BY m.id ORDER BY m.orden ASC",
+    "structure_params": {
+      "usuario_id": "string"
+    },
+    "orderArray": ["usuario_id"]
+  },
+  "getSesionesPorMundo": {
+    "query": "SELECT s.id, s.mundo_id, s.orden, s.titulo, s.tipo_sesion, s.xp_recompensa, COALESCE(pu.estado, CASE WHEN s.orden = 1 THEN 'activo' ELSE 'bloqueado' END) AS estado, COALESCE(pu.puntaje_obtenido, 0) AS puntaje_obtenido, COALESCE(pu.xp_ganada, 0) AS xp_ganada, COALESCE(pu.intentos, 0) AS intentos FROM sesiones s LEFT JOIN progreso_usuarios pu ON pu.sesion_id = s.id AND pu.usuario_id = $1 WHERE s.mundo_id = $2 ORDER BY s.orden ASC",
+    "structure_params": {
+      "usuario_id": "string",
+      "mundo_id": "string"
+    },
+    "orderArray": ["usuario_id", "mundo_id"]
+  },
+  "getSesionPorId": {
+    "query": "SELECT s.id, s.mundo_id, s.orden, s.titulo, s.tipo_sesion, s.xp_recompensa, s.contenido_teorico, s.cuestionario_json, COALESCE(pu.estado, CASE WHEN s.orden = 1 THEN 'activo' ELSE 'bloqueado' END) AS estado, COALESCE(pu.puntaje_obtenido, 0) AS puntaje_obtenido, COALESCE(pu.intentos, 0) AS intentos FROM sesiones s LEFT JOIN progreso_usuarios pu ON pu.sesion_id = s.id AND pu.usuario_id = $1 WHERE s.id = $2",
+    "structure_params": {
+      "usuario_id": "string",
+      "sesion_id": "string"
+    },
+    "orderArray": ["usuario_id", "sesion_id"]
+  },
+  "getSiguienteSesionEnMundo": {
+    "query": "SELECT id, orden FROM sesiones WHERE mundo_id = $1 AND orden = $2 LIMIT 1",
+    "structure_params": {
+      "mundo_id": "string",
+      "siguiente_orden": "number"
+    },
+    "orderArray": ["mundo_id", "siguiente_orden"]
+  },
+  "upsertProgresoCompletado": {
+    "query": "INSERT INTO progreso_usuarios (usuario_id, sesion_id, estado, puntaje_obtenido, xp_ganada, intentos, completado_en) VALUES ($1, $2, 'completado', $3, $4, 1, NOW()) ON CONFLICT (usuario_id, sesion_id) DO UPDATE SET estado = 'completado', puntaje_obtenido = GREATEST(progreso_usuarios.puntaje_obtenido, EXCLUDED.puntaje_obtenido), xp_ganada = GREATEST(progreso_usuarios.xp_ganada, EXCLUDED.xp_ganada), intentos = progreso_usuarios.intentos + 1, completado_en = COALESCE(progreso_usuarios.completado_en, NOW()) RETURNING id, usuario_id, sesion_id, estado, puntaje_obtenido, xp_ganada, intentos, completado_en",
+    "structure_params": {
+      "usuario_id": "string",
+      "sesion_id": "string",
+      "puntaje_obtenido": "number",
+      "xp_ganada": "number"
+    },
+    "orderArray": ["usuario_id", "sesion_id", "puntaje_obtenido", "xp_ganada"]
+  },
+  "desbloquearSiguienteSesion": {
+    "query": "INSERT INTO progreso_usuarios (usuario_id, sesion_id, estado, intentos) VALUES ($1, $2, 'activo', 0) ON CONFLICT (usuario_id, sesion_id) DO UPDATE SET estado = CASE WHEN progreso_usuarios.estado = 'completado' THEN 'completado' ELSE 'activo' END RETURNING id, sesion_id, estado",
+    "structure_params": {
+      "usuario_id": "string",
+      "siguiente_sesion_id": "string"
+    },
+    "orderArray": ["usuario_id", "siguiente_sesion_id"]
+  },
+  "registrarIntentoFallido": {
+    "query": "INSERT INTO progreso_usuarios (usuario_id, sesion_id, estado, intentos) VALUES ($1, $2, 'activo', 1) ON CONFLICT (usuario_id, sesion_id) DO UPDATE SET intentos = progreso_usuarios.intentos + 1 RETURNING id, sesion_id, estado, intentos",
+    "structure_params": {
+      "usuario_id": "string",
+      "sesion_id": "string"
+    },
+    "orderArray": ["usuario_id", "sesion_id"]
+  },
+  "getRetosJefeFinal": {
+    "query": "SELECT j.id, j.mundo_id, m.titulo AS mundo_titulo, j.ronda, j.enunciado_mision, j.plantilla_codigo, j.bloques_opciones, j.pista_artur FROM jefe_final_retos j INNER JOIN mundos m ON m.id = j.mundo_id ORDER BY j.ronda ASC",
+    "structure_params": {},
+    "orderArray": []
+  },
+  "getComentariosPorSesion": {
+    "query": "SELECT c.id, c.sesion_id, c.usuario_id, u.nombre_usuario, u.nivel_actual, c.contenido, c.creado_en FROM comentarios_sesion c INNER JOIN usuarios u ON u.id = c.usuario_id WHERE c.sesion_id = $1 ORDER BY c.creado_en DESC",
+    "structure_params": {
+      "sesion_id": "string"
+    },
+    "orderArray": ["sesion_id"]
+  },
+  "crearComentarioSesion": {
+    "query": "INSERT INTO comentarios_sesion (sesion_id, usuario_id, contenido) VALUES ($1, $2, $3) RETURNING id, sesion_id, usuario_id, contenido, creado_en",
+    "structure_params": {
+      "sesion_id": "string",
+      "usuario_id": "string",
+      "contenido": "string"
+    },
+    "orderArray": ["sesion_id", "usuario_id", "contenido"]
   }
 }
