@@ -25,11 +25,10 @@ class Session {
     // TypeScript YA RECONOCE session.user automáticamente aquí
     sessionObject.request.session.user = {
       id: currentUser.id,
-      email: currentUser.email,
-      nombre: currentUser.nombre,
-      tipo: String(currentUser.tipo || "")
-        .trim()
-        .toUpperCase(),
+      correo: currentUser.correo,
+      nombre_usuario: currentUser.nombre_usuario,
+      xp_total: currentUser.xp_total,
+      nivel_actual: currentUser.nivel_actual,
     };
 
     sessionObject.response.json({
